@@ -4,81 +4,17 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import Q
+from django.db import IntegrityError
 from .models import StringAnalysis
 from .serializers import StringAnalysisSerializer
 
 
-class CreateStringView(APIView):
+class StringsView(APIView):
     """
-    API view to create a new string analysis.
+    Combined API view for string operations.
     
+    GET: List and filter string analyses
     POST: Create a new string analysis
-    """
-    
-    def post(self, request):
-        """
-        Handle POST request to create a new string analysis.
-        
-        Args:
-            request: HTTP request object with string value
-            
-        Returns:
-            Response with created string analysis data
-        """
-        serializer = StringAnalysisSerializer(data=request.data)
-        
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class RetrieveStringView(APIView):
-    """
-    API view to retrieve a specific string analysis by its value.
-    
-    GET: Retrieve a string analysis
-    """
-    
-    def get(self, request, string_value):
-        """
-        Handle GET request to retrieve a string analysis.
-        
-        Args:
-            request: HTTP request object
-            string_value: URL-encoded string value to retrieve
-            
-        Returns:
-            Response with string analysis data or 404
-        """
-        # Decode URL-encoded value
-        decoded_value = unquote(string_value)
-        
-        try:
-            string_analysis = StringAnalysis.objects.get(value=decoded_value)
-            serializer = StringAnalysisSerializer(string_analysis)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except StringAnalysis.DoesNotExist:
-            return Response(
-                {
-                    'error': 'String not found',
-                    'details': f'No string analysis found with value: {decoded_value}'
-                },
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-
-class ListStringsView(APIView):
-    """
-    API view to list and filter string analyses.
-    
-    Query Parameters:
-        - is_palindrome (bool): Filter by palindrome status
-        - min_length (int): Minimum string length
-        - max_length (int): Maximum string length
-        - word_count (int): Filter by exact word count
-        - contains_character (str): Filter strings containing this character
     """
     
     def get(self, request):
@@ -188,6 +124,119 @@ class ListStringsView(APIView):
             },
             status=status.HTTP_200_OK
         )
+    
+    def post(self, request):
+        """
+        Handle POST request to create a new string analysis.
+        If the string already exists, return the existing analysis.
+        
+        Args:
+            request: HTTP request object with string value
+            
+        Returns:
+            Response with created or existing string analysis data
+        """
+        serializer = StringAnalysisSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            try:
+                # Try to create the string analysis
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            except IntegrityError:
+                # String already exists, return the existing one
+                value = serializer.validated_data['value']
+                existing = StringAnalysis.objects.get(value=value)
+                existing_serializer = StringAnalysisSerializer(existing)
+                return Response(
+                    {
+                        'message': 'String already exists',
+                        'data': existing_serializer.data
+                    },
+                    status=status.HTTP_200_OK
+                )
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class StringDetailView(APIView):
+    """
+    API view to retrieve or delete a specific string analysis by its value.
+    
+    GET: Retrieve a string analysis
+    DELETE: Delete a string analysis
+    """
+    
+    def get(self, request, string_value):
+        """
+        Handle GET request to retrieve a string analysis.
+        
+        Args:
+            request: HTTP request object
+            string_value: URL-encoded string value to retrieve
+            
+        Returns:
+            Response with string analysis data or 404
+        """
+        # Decode URL-encoded value
+        decoded_value = unquote(string_value)
+        
+        try:
+            string_analysis = StringAnalysis.objects.get(value=decoded_value)
+            serializer = StringAnalysisSerializer(string_analysis)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except StringAnalysis.DoesNotExist:
+            return Response(
+                {
+                    'error': 'String not found',
+                    'details': f'No string analysis found with value: {decoded_value}'
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    def delete(self, request, string_value):
+        """
+        Handle DELETE request to remove a string analysis.
+        
+        Args:
+            request: HTTP request object
+            string_value: URL-encoded string value to delete
+            
+        Returns:
+            204 No Content on success, 404 if not found
+        """
+        # Decode URL-encoded value
+        decoded_value = unquote(string_value)
+        
+        try:
+            # Look up StringAnalysis by exact value match
+            string_analysis = StringAnalysis.objects.get(value=decoded_value)
+            
+            # Delete the object
+            string_analysis.delete()
+            
+            # Return 204 No Content on success
+            return Response(status=status.HTTP_204_NO_CONTENT)
+            
+        except StringAnalysis.DoesNotExist:
+            # Return 404 if not found
+            return Response(
+                {
+                    'error': 'String not found',
+                    'details': f'No string analysis found with value: {decoded_value}'
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except StringAnalysis.MultipleObjectsReturned:
+            # Handle edge case where multiple objects have the same value
+            # Delete all matching objects
+            count = StringAnalysis.objects.filter(value=decoded_value).count()
+            StringAnalysis.objects.filter(value=decoded_value).delete()
+            
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+
 
 
 class NaturalLanguageFilterView(APIView):
@@ -416,56 +465,4 @@ class NaturalLanguageFilterView(APIView):
         return queryset
 
 
-class DeleteStringView(APIView):
-    """
-    API view to delete a string analysis by its value.
-    
-    URL Parameters:
-        - value (str): The exact string value to delete (URL encoded)
-    """
-    
-    def delete(self, request, string_value):
-        """
-        Handle DELETE request to remove a string analysis.
-        
-        Args:
-            request: HTTP request object
-            string_value: URL-encoded string value to delete
-            
-        Returns:
-            204 No Content on success, 404 if not found
-        """
-        # Decode URL-encoded value
-        decoded_value = unquote(string_value)
-        
-        try:
-            # Look up StringAnalysis by exact value match
-            string_analysis = StringAnalysis.objects.get(value=decoded_value)
-            
-            # Delete the object
-            string_analysis.delete()
-            
-            # Return 204 No Content on success
-            return Response(status=status.HTTP_204_NO_CONTENT)
-            
-        except StringAnalysis.DoesNotExist:
-            # Return 404 if not found
-            return Response(
-                {
-                    'error': 'String not found',
-                    'details': f'No string analysis found with value: {decoded_value}'
-                },
-                status=status.HTTP_404_NOT_FOUND
-            )
-        except StringAnalysis.MultipleObjectsReturned:
-            # Handle edge case where multiple objects have the same value
-            # Delete all matching objects
-            count = StringAnalysis.objects.filter(value=decoded_value).count()
-            StringAnalysis.objects.filter(value=decoded_value).delete()
-            
-            return Response(
-                {
-                    'message': f'Deleted {count} string analyses with matching value'
-                },
-                status=status.HTTP_204_NO_CONTENT
-            )
+
