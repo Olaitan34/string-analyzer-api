@@ -264,7 +264,7 @@ class StringListCreateView(APIView):
         # STEP 1: Check if 'value' field exists in request.data
         if 'value' not in request.data:
             return Response(
-                {'error': "Missing 'value' field"},
+                {'error': "Doesn\'t Exist"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -272,7 +272,7 @@ class StringListCreateView(APIView):
         value = request.data.get('value')
         if value is None or not isinstance(value, str):
             return Response(
-                {'error': "Invalid data type for 'value' (must be string)"},
+                {'error': "Not A String"},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY
             )
         
@@ -282,7 +282,7 @@ class StringListCreateView(APIView):
         # STEP 4: Check if string already exists (duplicate detection)
         if StringAnalysis.objects.filter(sha256_hash=sha256_hash).exists():
             return Response(
-                {'error': 'String already exists in the system'},
+                {'error': 'Already Exists'},
                 status=status.HTTP_409_CONFLICT
             )
         
@@ -332,7 +332,7 @@ class StringRetrieveDeleteView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
         except StringAnalysis.DoesNotExist:
             return Response(
-                {'error': 'String does not exist in the system'},
+                {'error': 'Doesn\'t Exist'},
                 status=status.HTTP_404_NOT_FOUND
             )
     
