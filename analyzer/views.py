@@ -128,14 +128,34 @@ class StringsView(APIView):
     def post(self, request):
         """
         Handle POST request to create a new string analysis.
-        If the string already exists, return the existing analysis.
+        If the string already exists, return 409 Conflict.
         
         Args:
             request: HTTP request object with string value
             
         Returns:
-            Response with created or existing string analysis data
+            Response with created string analysis data or error
         """
+        # Check if 'value' field is present
+        if 'value' not in request.data:
+            return Response(
+                {
+                    'error': 'Missing required field',
+                    'details': "The 'value' field is required"
+                },
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY
+            )
+        
+        # Check if value is a string
+        if not isinstance(request.data.get('value'), str):
+            return Response(
+                {
+                    'error': 'Invalid data type',
+                    'details': "The 'value' field must be a string"
+                },
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY
+            )
+        
         serializer = StringAnalysisSerializer(data=request.data)
         
         if serializer.is_valid():
@@ -144,19 +164,16 @@ class StringsView(APIView):
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             except IntegrityError:
-                # String already exists, return the existing one
-                value = serializer.validated_data['value']
-                existing = StringAnalysis.objects.get(value=value)
-                existing_serializer = StringAnalysisSerializer(existing)
+                # String already exists, return 409 Conflict
                 return Response(
                     {
-                        'message': 'String already exists',
-                        'data': existing_serializer.data
+                        'error': 'Duplicate string',
+                        'details': 'A string with this value already exists'
                     },
-                    status=status.HTTP_200_OK
+                    status=status.HTTP_409_CONFLICT
                 )
         
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
 
 class StringDetailView(APIView):
@@ -188,8 +205,7 @@ class StringDetailView(APIView):
         except StringAnalysis.DoesNotExist:
             return Response(
                 {
-                    'error': 'String not found',
-                    'details': f'No string analysis found with value: {decoded_value}'
+                    'error': 'String not found'
                 },
                 status=status.HTTP_404_NOT_FOUND
             )
@@ -222,12 +238,10 @@ class StringDetailView(APIView):
             # Return 404 if not found
             return Response(
                 {
-                    'error': 'String not found',
-                    'details': f'No string analysis found with value: {decoded_value}'
+                    'error': 'String not found'
                 },
                 status=status.HTTP_404_NOT_FOUND
             )
-        except StringAnalysis.MultipleObjectsReturned:
             # Handle edge case where multiple objects have the same value
             # Delete all matching objects
             count = StringAnalysis.objects.filter(value=decoded_value).count()
@@ -266,13 +280,15 @@ class NaturalLanguageFilterView(APIView):
         Returns:
             Response with parsed filters and filtered data
         """
-        query = request.query_params.get('query', '').strip()
+        # Accept both 'q' and 'query' as parameter names
+        query = request.query_params.get('q') or request.query_params.get('query', '')
+        query = query.strip()
         
         if not query:
             return Response(
                 {
                     'error': 'Query parameter is required',
-                    'details': 'Please provide a natural language query using ?query='
+                    'details': 'Please provide a natural language query using ?q= or ?query='
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
