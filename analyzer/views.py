@@ -10,6 +10,122 @@ from .models import StringAnalysis
 from .serializers import StringAnalysisSerializer
 
 
+def parse_natural_language_query(query: str) -> dict:
+    """
+    Comprehensive natural language query parser for string analysis filters.
+    
+    Handles ALL these patterns (case-insensitive):
+    1. "palindrome" or "palindromic" → is_palindrome=True
+    2. "single word" → word_count=1
+    3. "X words" or "X word" (where X is a number) → word_count=X
+    4. "longer than X characters" → min_length=X+1
+    5. "containing letter X" or "contains the letter X" → contains_character=X
+    6. "first vowel" → contains_character='a'
+    7. "strings containing the letter z" → contains_character='z'
+    
+    Args:
+        query: Natural language query string
+        
+    Returns:
+        Dictionary of parsed filters that can be applied to Django queryset
+        Example: {'is_palindrome': True, 'word_count': 1}
+        
+    Raises:
+        ValueError: If query cannot be parsed into any recognizable pattern
+        
+    Examples:
+        >>> parse_natural_language_query("palindrome")
+        {'is_palindrome': True}
+        
+        >>> parse_natural_language_query("single word")
+        {'word_count': 1}
+        
+        >>> parse_natural_language_query("3 words containing letter a")
+        {'word_count': 3, 'contains_character': 'a'}
+        
+        >>> parse_natural_language_query("longer than 5 characters")
+        {'min_length': 6}
+    """
+    filters = {}
+    query_lower = query.lower()
+    
+    # Pattern 1: "palindrome" or "palindromic"
+    if re.search(r'\bpalindrom(e|ic|es)?\b', query_lower):
+        filters['is_palindrome'] = True
+    
+    # Pattern 2: "single word"
+    if re.search(r'\bsingle\s+word\b', query_lower):
+        filters['word_count'] = 1
+    
+    # Pattern 3: "X words" or "X word" (numeric)
+    word_count_match = re.search(r'\b(\d+)\s+words?\b', query_lower)
+    if word_count_match:
+        filters['word_count'] = int(word_count_match.group(1))
+    
+    # Pattern 3b: "one word", "two words", etc. (text numbers)
+    word_text_map = {
+        'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+        'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+    }
+    for word_text, word_num in word_text_map.items():
+        if re.search(rf'\b{word_text}\s+words?\b', query_lower):
+            filters['word_count'] = word_num
+            break
+    
+    # Pattern 4: "longer than X characters"
+    longer_match = re.search(r'\blonger\s+than\s+(\d+)\s+characters?\b', query_lower)
+    if longer_match:
+        min_length = int(longer_match.group(1)) + 1
+        filters['min_length'] = min_length
+    
+    # Additional: "shorter than X characters"
+    shorter_match = re.search(r'\bshorter\s+than\s+(\d+)\s+characters?\b', query_lower)
+    if shorter_match:
+        max_length = int(shorter_match.group(1)) - 1
+        if max_length < 0:
+            raise ValueError('Length constraints result in invalid max_length (< 0)')
+        filters['max_length'] = max_length
+    
+    # Additional: "at least X characters"
+    at_least_match = re.search(r'\bat\s+least\s+(\d+)\s+characters?\b', query_lower)
+    if at_least_match:
+        filters['min_length'] = int(at_least_match.group(1))
+    
+    # Additional: "at most X characters"
+    at_most_match = re.search(r'\bat\s+most\s+(\d+)\s+characters?\b', query_lower)
+    if at_most_match:
+        filters['max_length'] = int(at_most_match.group(1))
+    
+    # Pattern 5 & 7: "containing letter X" or "contains the letter X"
+    # Matches: "containing letter a", "contains the letter z", "strings containing the letter z"
+    containing_match = re.search(r'\bcontain(?:ing|s)?\s+(?:the\s+)?(?:letter|character)\s+([a-z])\b', query_lower)
+    if containing_match:
+        filters['contains_character'] = containing_match.group(1)
+    
+    # Pattern 6: "first vowel"
+    if re.search(r'\bfirst\s+vowel\b', query_lower):
+        filters['contains_character'] = 'a'
+    
+    # Additional vowel patterns
+    if re.search(r'\bsecond\s+vowel\b', query_lower):
+        filters['contains_character'] = 'e'
+    if re.search(r'\bthird\s+vowel\b', query_lower):
+        filters['contains_character'] = 'i'
+    if re.search(r'\bfourth\s+vowel\b', query_lower):
+        filters['contains_character'] = 'o'
+    if re.search(r'\bfifth\s+vowel\b', query_lower):
+        filters['contains_character'] = 'u'
+    
+    if not filters:
+        raise ValueError(
+            'Could not parse any recognizable patterns from the query. '
+            'Supported patterns include: "palindrome", "X words", '
+            '"longer than X characters", "containing letter X", "first vowel"'
+        )
+    
+    return filters
+
+
 class StringListCreateView(APIView):
     """
     API view to list strings with filtering and create new string analyses.
@@ -129,41 +245,45 @@ class StringListCreateView(APIView):
     def post(self, request):
         """
         Handle POST request to create a new string analysis.
-        If the string already exists, return 409 Conflict.
         
         Args:
             request: HTTP request object with string value
             
         Returns:
             Response with created string analysis data or error
+            
+        Status Codes:
+            - 201 Created: Successfully created new string
+            - 400 Bad Request: Missing 'value' field
+            - 422 Unprocessable Entity: Invalid data type
+            - 409 Conflict: String already exists
         """
-        # Check if 'value' field is present
+        # Step 1: Check if 'value' field exists in request.data
         if 'value' not in request.data:
             return Response(
                 {
-                    'error': 'Missing required field',
-                    'details': "The 'value' field is required"
+                    'error': "Missing 'value' field"
                 },
-                status=status.HTTP_422_UNPROCESSABLE_ENTITY
+                status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Check if value is a string
-        if not isinstance(request.data.get('value'), str):
+        # Step 2: Check if 'value' is a string type
+        value = request.data.get('value')
+        if not isinstance(value, str) or value is None:
             return Response(
                 {
-                    'error': 'Invalid data type',
-                    'details': "The 'value' field must be a string"
+                    'error': "Invalid data type for 'value' (must be string)"
                 },
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY
             )
         
-        # Get the value from request
-        value = request.data.get('value')
+        # Step 3: Extract the value from request.data
+        # (already extracted in step 2)
         
-        # Calculate SHA-256 hash
+        # Step 4: Calculate SHA-256 hash
         sha256_hash = hashlib.sha256(value.encode('utf-8')).hexdigest()
         
-        # Check if string with this hash already exists
+        # Step 5: Check if string already exists
         if StringAnalysis.objects.filter(sha256_hash=sha256_hash).exists():
             return Response(
                 {
@@ -172,15 +292,23 @@ class StringListCreateView(APIView):
                 status=status.HTTP_409_CONFLICT
             )
         
-        # Proceed with serializer validation and creation
-        serializer = StringAnalysisSerializer(data=request.data)
+        # Step 6: Create StringAnalysis object with all calculated properties
+        try:
+            string_analysis = StringAnalysis.objects.create(value=value)
+        except Exception as e:
+            return Response(
+                {
+                    'error': 'Failed to create string analysis',
+                    'details': str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
-        if serializer.is_valid():
-            # Create the string analysis
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # Step 7: Serialize the created object
+        serializer = StringAnalysisSerializer(string_analysis)
         
-        return Response(serializer.errors, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        # Step 8: Return Response with status=status.HTTP_201_CREATED
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class StringRetrieveDeleteView(APIView):
@@ -212,8 +340,7 @@ class StringRetrieveDeleteView(APIView):
         except StringAnalysis.DoesNotExist:
             return Response(
                 {
-                    'error': 'String not found',
-                    'details': f'No string analysis found with value: {decoded_value}'
+                    'error': 'String does not exist in the system'
                 },
                 status=status.HTTP_404_NOT_FOUND
             )
@@ -239,15 +366,14 @@ class StringRetrieveDeleteView(APIView):
             # Delete the object
             string_analysis.delete()
             
-            # Return 204 No Content on success
+            # Return 204 No Content on success (empty response body)
             return Response(status=status.HTTP_204_NO_CONTENT)
             
         except StringAnalysis.DoesNotExist:
             # Return 404 if not found
             return Response(
                 {
-                    'error': 'String not found',
-                    'details': f'No string analysis found with value: {decoded_value}'
+                    'error': 'String does not exist in the system'
                 },
                 status=status.HTTP_404_NOT_FOUND
             )
@@ -279,45 +405,47 @@ class NaturalLanguageFilterView(APIView):
             
         Returns:
             Response with parsed filters and filtered data
+            
+        Status Codes:
+            - 200 OK: Successfully parsed and filtered
+            - 400 Bad Request: Unable to parse query
+            - 422 Unprocessable Entity: Conflicting filters
         """
+        # Step 1: Get the 'query' parameter from request.query_params
         query = request.query_params.get('query', '').strip()
         
         if not query:
             return Response(
                 {
-                    'error': 'Query parameter is required',
-                    'details': 'Please provide a natural language query using ?query='
+                    'error': 'Query parameter is required'
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Parse the natural language query
+        # Step 2: Call parse_natural_language_query(query) to get filters
         try:
-            filters = self._parse_query(query)
+            filters = parse_natural_language_query(query)
         except ValueError as e:
+            # Step 3: If no filters could be parsed, return error
             return Response(
                 {
-                    'error': 'Unable to parse query',
-                    'details': str(e),
-                    'query': query
+                    'error': 'Unable to parse natural language query'
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Validate filters for conflicts
+        # Step 4: Check for conflicting filters
         validation_error = self._validate_filters(filters)
         if validation_error:
             return Response(
                 {
                     'error': 'Conflicting filters detected',
-                    'details': validation_error,
-                    'parsed_filters': filters,
-                    'query': query
+                    'details': validation_error
                 },
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY
             )
         
-        # Build queryset with parsed filters
+        # Step 5: Apply filters to StringAnalysis.objects.filter()
         queryset = StringAnalysis.objects.all()
         queryset = self._apply_filters(queryset, filters)
         
@@ -325,82 +453,35 @@ class NaturalLanguageFilterView(APIView):
         results = queryset.all()
         serializer = StringAnalysisSerializer(results, many=True)
         
+        # Step 6: Return response with data, count, and interpreted_query
         return Response(
             {
-                'query': query,
-                'parsed_filters': filters,
                 'data': serializer.data,
-                'count': results.count()
+                'count': results.count(),
+                'interpreted_query': {
+                    'original': query,
+                    'parsed_filters': filters
+                }
             },
             status=status.HTTP_200_OK
         )
     
     def _parse_query(self, query):
-        """Parse natural language query into filter parameters."""
-        filters = {}
-        query_lower = query.lower()
+        """
+        Parse natural language query into filter parameters.
+        Uses the comprehensive parse_natural_language_query function.
         
-        # Pattern: "single word palindrome"
-        if re.search(r'\bsingle\s+word\s+palindrom(e|ic)\b', query_lower):
-            filters['word_count'] = 1
-            filters['is_palindrome'] = True
-        
-        # Pattern: "palindrome" or "palindromic" (not already matched)
-        elif re.search(r'\bpalindrom(e|ic)\b', query_lower):
-            filters['is_palindrome'] = True
-        
-        # Pattern: "longer than X characters"
-        longer_match = re.search(r'\blonger\s+than\s+(\d+)\s+characters?\b', query_lower)
-        if longer_match:
-            min_length = int(longer_match.group(1)) + 1
-            filters['min_length'] = min_length
-        
-        # Pattern: "shorter than X characters"
-        shorter_match = re.search(r'\bshorter\s+than\s+(\d+)\s+characters?\b', query_lower)
-        if shorter_match:
-            max_length = int(shorter_match.group(1)) - 1
-            if max_length < 0:
-                raise ValueError('Length constraints result in invalid max_length (< 0)')
-            filters['max_length'] = max_length
-        
-        # Pattern: "at least X characters"
-        at_least_match = re.search(r'\bat\s+least\s+(\d+)\s+characters?\b', query_lower)
-        if at_least_match:
-            filters['min_length'] = int(at_least_match.group(1))
-        
-        # Pattern: "at most X characters"
-        at_most_match = re.search(r'\bat\s+most\s+(\d+)\s+characters?\b', query_lower)
-        if at_most_match:
-            filters['max_length'] = int(at_most_match.group(1))
-        
-        # Pattern: "containing letter X" or "contains letter X"
-        containing_match = re.search(r'\bcontain(ing|s)?\s+(letter|character)\s+([a-z])\b', query_lower)
-        if containing_match:
-            filters['contains_character'] = containing_match.group(3)
-        
-        # Pattern: "X words" or "X word"
-        word_count_match = re.search(r'\b(\d+)\s+words?\b', query_lower)
-        if word_count_match:
-            filters['word_count'] = int(word_count_match.group(1))
-        
-        # Pattern: "one word", "two words", etc.
-        word_text_map = {
-            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
-        }
-        for word_text, word_num in word_text_map.items():
-            if re.search(rf'\b{word_text}\s+words?\b', query_lower):
-                filters['word_count'] = word_num
-                break
-        
-        if not filters:
-            raise ValueError(
-                'Could not parse any recognizable patterns from the query. '
-                'Supported patterns include: "palindrome", "X words", '
-                '"longer than X characters", "containing letter X"'
-            )
-        
-        return filters
+        Args:
+            query: Natural language query string (case-insensitive)
+            
+        Returns:
+            Dictionary of parsed filters for Django queryset
+            
+        Raises:
+            ValueError: If query cannot be parsed
+        """
+        # Use the standalone parser function
+        return parse_natural_language_query(query)
     
     def _validate_filters(self, filters):
         """Validate that filters don't conflict with each other."""
