@@ -258,57 +258,46 @@ class StringListCreateView(APIView):
             - 422 Unprocessable Entity: Invalid data type
             - 409 Conflict: String already exists
         """
-        # Step 1: Check if 'value' field exists in request.data
+        # STEP 1: Check if 'value' field exists in request.data
         if 'value' not in request.data:
             return Response(
-                {
-                    'error': "Missing 'value' field"
-                },
+                {'error': "Missing 'value' field"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Step 2: Check if 'value' is a string type
+        # STEP 2: Check if 'value' is a string type
         value = request.data.get('value')
-        if not isinstance(value, str) or value is None:
+        if value is None or not isinstance(value, str):
             return Response(
-                {
-                    'error': "Invalid data type for 'value' (must be string)"
-                },
+                {'error': "Invalid data type for 'value' (must be string)"},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY
             )
         
-        # Step 3: Extract the value from request.data
-        # (already extracted in step 2)
-        
-        # Step 4: Calculate SHA-256 hash
+        # STEP 3: Calculate SHA-256 hash for duplicate check
         sha256_hash = hashlib.sha256(value.encode('utf-8')).hexdigest()
         
-        # Step 5: Check if string already exists
+        # STEP 4: Check if string already exists (duplicate detection)
         if StringAnalysis.objects.filter(sha256_hash=sha256_hash).exists():
             return Response(
-                {
-                    'error': 'String already exists in the system'
-                },
+                {'error': 'String already exists in the system'},
                 status=status.HTTP_409_CONFLICT
             )
         
-        # Step 6: Create StringAnalysis object with all calculated properties
-        try:
-            string_analysis = StringAnalysis.objects.create(value=value)
-        except Exception as e:
-            return Response(
-                {
-                    'error': 'Failed to create string analysis',
-                    'details': str(e)
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        # STEP 5: Use serializer to create object with all calculated properties
+        serializer = StringAnalysisSerializer(data=request.data)
         
-        # Step 7: Serialize the created object
-        serializer = StringAnalysisSerializer(string_analysis)
+        if serializer.is_valid():
+            # This calls the serializer's create() method which calculates everything
+            serializer.save()
+            
+            # STEP 6: Return 201 Created with serialized data
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         
-        # Step 8: Return Response with status=status.HTTP_201_CREATED
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # If serializer validation fails (shouldn't happen with our checks above)
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
 
 class StringRetrieveDeleteView(APIView):
@@ -339,9 +328,7 @@ class StringRetrieveDeleteView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
         except StringAnalysis.DoesNotExist:
             return Response(
-                {
-                    'error': 'String does not exist in the system'
-                },
+                {'error': 'String does not exist in the system'},
                 status=status.HTTP_404_NOT_FOUND
             )
     
@@ -372,9 +359,7 @@ class StringRetrieveDeleteView(APIView):
         except StringAnalysis.DoesNotExist:
             # Return 404 if not found
             return Response(
-                {
-                    'error': 'String does not exist in the system'
-                },
+                {'error': 'String does not exist in the system'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
@@ -416,9 +401,7 @@ class NaturalLanguageFilterView(APIView):
         
         if not query:
             return Response(
-                {
-                    'error': 'Query parameter is required'
-                },
+                {'error': 'Query parameter is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -428,9 +411,7 @@ class NaturalLanguageFilterView(APIView):
         except ValueError as e:
             # Step 3: If no filters could be parsed, return error
             return Response(
-                {
-                    'error': 'Unable to parse natural language query'
-                },
+                {'error': 'Unable to parse natural language query'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -465,23 +446,6 @@ class NaturalLanguageFilterView(APIView):
             },
             status=status.HTTP_200_OK
         )
-    
-    def _parse_query(self, query):
-        """
-        Parse natural language query into filter parameters.
-        Uses the comprehensive parse_natural_language_query function.
-        
-        Args:
-            query: Natural language query string (case-insensitive)
-            
-        Returns:
-            Dictionary of parsed filters for Django queryset
-            
-        Raises:
-            ValueError: If query cannot be parsed
-        """
-        # Use the standalone parser function
-        return parse_natural_language_query(query)
     
     def _validate_filters(self, filters):
         """Validate that filters don't conflict with each other."""
@@ -524,6 +488,3 @@ class NaturalLanguageFilterView(APIView):
             queryset = queryset.filter(value__icontains=filters['contains_character'])
         
         return queryset
-
-
-
