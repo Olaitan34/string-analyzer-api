@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: string-analyzer-api
+    env: python
+    region: oregon
+    buildCommand: chmod +x build.sh && ./build.sh
+    startCommand: python -m gunicorn string_analyzer.wsgi:application --bind 0.0.0.0:$PORT
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: False
+      - key: ALLOWED_HOSTS
+        value: .sevalla.app,.onrender.com
+      - key: DATABASE_URL
+        sync: false
