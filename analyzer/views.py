@@ -6,6 +6,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import Q
 from django.db import IntegrityError
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from .models import StringAnalysis
 from .serializers import StringAnalysisSerializer
 
@@ -126,6 +128,7 @@ def parse_natural_language_query(query: str) -> dict:
     return filters
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class StringListCreateView(APIView):
     """
     API view to list strings with filtering and create new string analyses.
@@ -300,6 +303,7 @@ class StringListCreateView(APIView):
         )
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class StringRetrieveDeleteView(APIView):
     """
     API view to retrieve or delete a specific string analysis by its value.
@@ -364,6 +368,7 @@ class StringRetrieveDeleteView(APIView):
             )
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class NaturalLanguageFilterView(APIView):
     """
     API view to filter strings using natural language queries.
