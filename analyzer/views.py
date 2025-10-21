@@ -1,4 +1,5 @@
 import re
+import hashlib
 from urllib.parse import unquote
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -9,11 +10,11 @@ from .models import StringAnalysis
 from .serializers import StringAnalysisSerializer
 
 
-class StringsView(APIView):
+class StringListCreateView(APIView):
     """
-    Combined API view for string operations.
+    API view to list strings with filtering and create new string analyses.
     
-    GET: List and filter string analyses
+    GET: List all strings with optional filtering
     POST: Create a new string analysis
     """
     
@@ -156,27 +157,33 @@ class StringsView(APIView):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY
             )
         
+        # Get the value from request
+        value = request.data.get('value')
+        
+        # Calculate SHA-256 hash
+        sha256_hash = hashlib.sha256(value.encode('utf-8')).hexdigest()
+        
+        # Check if string with this hash already exists
+        if StringAnalysis.objects.filter(sha256_hash=sha256_hash).exists():
+            return Response(
+                {
+                    'error': 'String already exists in the system'
+                },
+                status=status.HTTP_409_CONFLICT
+            )
+        
+        # Proceed with serializer validation and creation
         serializer = StringAnalysisSerializer(data=request.data)
         
         if serializer.is_valid():
-            try:
-                # Try to create the string analysis
-                serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            except IntegrityError:
-                # String already exists, return 409 Conflict
-                return Response(
-                    {
-                        'error': 'Duplicate string',
-                        'details': 'A string with this value already exists'
-                    },
-                    status=status.HTTP_409_CONFLICT
-                )
+            # Create the string analysis
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
 
-class StringDetailView(APIView):
+class StringRetrieveDeleteView(APIView):
     """
     API view to retrieve or delete a specific string analysis by its value.
     
@@ -205,7 +212,8 @@ class StringDetailView(APIView):
         except StringAnalysis.DoesNotExist:
             return Response(
                 {
-                    'error': 'String not found'
+                    'error': 'String not found',
+                    'details': f'No string analysis found with value: {decoded_value}'
                 },
                 status=status.HTTP_404_NOT_FOUND
             )
@@ -238,19 +246,11 @@ class StringDetailView(APIView):
             # Return 404 if not found
             return Response(
                 {
-                    'error': 'String not found'
+                    'error': 'String not found',
+                    'details': f'No string analysis found with value: {decoded_value}'
                 },
                 status=status.HTTP_404_NOT_FOUND
             )
-            # Handle edge case where multiple objects have the same value
-            # Delete all matching objects
-            count = StringAnalysis.objects.filter(value=decoded_value).count()
-            StringAnalysis.objects.filter(value=decoded_value).delete()
-            
-            return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-
 
 
 class NaturalLanguageFilterView(APIView):
@@ -280,15 +280,13 @@ class NaturalLanguageFilterView(APIView):
         Returns:
             Response with parsed filters and filtered data
         """
-        # Accept both 'q' and 'query' as parameter names
-        query = request.query_params.get('q') or request.query_params.get('query', '')
-        query = query.strip()
+        query = request.query_params.get('query', '').strip()
         
         if not query:
             return Response(
                 {
                     'error': 'Query parameter is required',
-                    'details': 'Please provide a natural language query using ?q= or ?query='
+                    'details': 'Please provide a natural language query using ?query='
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
@@ -338,18 +336,7 @@ class NaturalLanguageFilterView(APIView):
         )
     
     def _parse_query(self, query):
-        """
-        Parse natural language query into filter parameters.
-        
-        Args:
-            query: Natural language query string
-            
-        Returns:
-            Dictionary of parsed filters
-            
-        Raises:
-            ValueError: If query cannot be parsed
-        """
+        """Parse natural language query into filter parameters."""
         filters = {}
         query_lower = query.lower()
         
@@ -416,16 +403,7 @@ class NaturalLanguageFilterView(APIView):
         return filters
     
     def _validate_filters(self, filters):
-        """
-        Validate that filters don't conflict with each other.
-        
-        Args:
-            filters: Dictionary of parsed filters
-            
-        Returns:
-            Error message string if conflict detected, None otherwise
-        """
-        # Check min_length <= max_length
+        """Validate that filters don't conflict with each other."""
         if 'min_length' in filters and 'max_length' in filters:
             if filters['min_length'] > filters['max_length']:
                 return (
@@ -433,36 +411,22 @@ class NaturalLanguageFilterView(APIView):
                     f"cannot be greater than max_length ({filters['max_length']})"
                 )
         
-        # Check word_count conflicts
-        if 'word_count' in filters:
-            if filters['word_count'] < 0:
-                return f"Invalid word_count: {filters['word_count']} (must be non-negative)"
+        if 'word_count' in filters and filters['word_count'] < 0:
+            return f"Invalid word_count: {filters['word_count']} (must be non-negative)"
         
-        # Check length constraints are non-negative
         if 'min_length' in filters and filters['min_length'] < 0:
             return f"Invalid min_length: {filters['min_length']} (must be non-negative)"
         
         if 'max_length' in filters and filters['max_length'] < 0:
             return f"Invalid max_length: {filters['max_length']} (must be non-negative)"
         
-        # Check contains_character is single character
-        if 'contains_character' in filters:
-            if len(filters['contains_character']) != 1:
-                return f"Invalid contains_character: must be a single character"
+        if 'contains_character' in filters and len(filters['contains_character']) != 1:
+            return f"Invalid contains_character: must be a single character"
         
         return None
     
     def _apply_filters(self, queryset, filters):
-        """
-        Apply parsed filters to queryset.
-        
-        Args:
-            queryset: Django queryset to filter
-            filters: Dictionary of filters to apply
-            
-        Returns:
-            Filtered queryset
-        """
+        """Apply parsed filters to queryset."""
         if 'is_palindrome' in filters:
             queryset = queryset.filter(is_palindrome=filters['is_palindrome'])
         
